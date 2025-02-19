@@ -1,0 +1,107 @@
+trigger:
+- main
+
+variables:
+  # Define the Azure subscription and AKS cluster name
+  azureSubscription: 'your-azure-subscription-name'
+  resourceGroup: 'your-resource-group-name'
+  aksCluster: 'your-aks-cluster-name'
+  registry: 'yourregistry.azurecr.io'
+  pythonAppImage: 'python-app-image:latest'
+  functionAppImage: 'function-app-image:latest'
+
+stages:
+- stage: DeployHelmCharts
+  displayName: 'Deploy Helm Charts to AKS'
+  jobs:
+  - job: DeployPythonAppAndFunction
+    displayName: 'Deploy Python App, Function, Loki, and Grafana'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Login to Azure'
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          echo "Logging in to Azure..."
+          az aks get-credentials --resource-group $(resourceGroup) --name $(aksCluster)
+
+    # Deploy Loki & Grafana
+    - task: HelmInstaller@1
+      displayName: 'Install Helm'
+      inputs:
+        helmVersionToInstall: 'v3.8.0'
+
+    - task: AzureCLI@2
+      displayName: 'Install Loki and Grafana'
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          echo "Deploying Loki and Grafana using Helm..."
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+          
+          # Install Loki (log aggregation)
+          helm upgrade --install loki grafana/loki-stack --namespace monitoring --create-namespace
+          
+          # Install Grafana (monitoring UI)
+          helm upgrade --install grafana grafana/grafana --namespace monitoring --set adminPassword='yourPassword'
+
+    # Deploy Python Application
+    - task: AzureCLI@2
+      displayName: 'Deploy Python Application'
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          echo "Deploying Python application using Helm..."
+          helm upgrade --install python-app ./my-python-app --namespace python-app --create-namespace
+          
+    # Deploy Azure Function App
+    - task: AzureCLI@2
+      displayName: 'Deploy Azure Function App'
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          echo "Deploying Azure Function App..."
+          helm upgrade --install azure-function ./azure-function-app --namespace functions --create-namespace
+
+    # Optional: Promtail for Loki logs collection
+    - task: AzureCLI@2
+      displayName: 'Deploy Promtail for Loki'
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          echo "Deploying Promtail for Loki..."
+          helm upgrade --install promtail grafana/promtail --namespace monitoring --create-namespace
+
+    # Access Grafana (port-forwarding)
+    - task: AzureCLI@2
+      displayName: 'Port Forward Grafana'
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          kubectl port-forward svc/grafana 3000:80 -n monitoring &
+          echo "Grafana is accessible at http://localhost:3000"
+          
+    # Optional: Verify deployments
+    - task: AzureCLI@2
+      displayName: 'Verify Deployments'
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          kubectl get pods -A
